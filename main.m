@@ -19,28 +19,57 @@ printInPlace = printUtility('Processing %d images: #', nImages);
 nPoints = 100;
 nRadius = 5;
 nTheta = 12;
-scFeat = zeros(nImages, nRadius * nTheta * nPoints);
+
+% 1. Original; 2. Left/right flipped; 3. Up/down flipped
+scFeats = cell(3, 1);
+for j = 1:3
+	scFeats{j} = zeros(nImages, nRadius * nTheta * nPoints);
+end
 
 for i = 1:nImages
 	printInPlace(i);
-	bw = imc.at(i);
-	boundary = getBoundary(bw);
+	bw = cell(3, 1);
+	bw{1} = imc.at(i);
+	bw{2} = fliplr(bw{1});
+	bw{3} = flipud(bw{1});
 
-	if size(boundary, 1) < nPoints * 1.75
-		scale = nPoints * 2 / size(boundary, 1);
-		boundary = getBoundary(imresize(bw, scale));
+	for j = 1:3
+		boundary = getBoundary(bw{j});
+		if size(boundary, 1) < nPoints * 1.75
+			scale = nPoints * 2 / size(boundary, 1);
+			boundary = getBoundary(imresize(bw{j}, scale));
+		end
+
+		boundary = downsampleBoundary(boundary, nPoints);
+		SC = calcShapeContexts(boundary, nRadius, nTheta);
+		SC = SC';
+		scFeats{j}(i, :) = SC(:)';
 	end
-
-	boundary = downsampleBoundary(boundary, nPoints);
-	SC = calcShapeContexts(boundary, nRadius, nTheta);
-	SC = SC';
-	scFeat(i, :) = SC(:)';
 end
 
 %% Matching
-matcher = ExhaustiveSearcher(scFeat);
-[nearInd, ~] = knnsearch(matcher, scFeat, 'K', knn);
-sameClass = bsxfun(@eq, gtLabels(nearInd), gtLabels);
+for j = 3:-1:1
+	matcher = ExhaustiveSearcher(scFeats{j});
+	[nearInd{j}, dists{j}] = knnsearch(matcher, scFeats{1}, 'K', knn);
+end
+
+printInPlace = printUtility('Processing %d images: #', nImages);
+nearestOfAll = zeros(nImages, knn);
+
+for i = 1:nImages
+	printInPlace(i);
+	best = inf(nImages, 1);
+	for j = 1:3
+		near = nearInd{j}(i, :)';
+		dst = dists{j}(i, :)';
+		best(near) = min(best(near), dst);
+	end
+
+	[~, ind] = sort(best);
+	nearestOfAll(i, :) = ind(1:knn)';
+end
+
+sameClass = bsxfun(@eq, gtLabels(nearestOfAll), gtLabels);
 % calculates the bull's eye score
 percentage = sum(sum(sameClass)) / (nImages / nClasses * nImages);
 fprintf('Score = %f\n', percentage);
